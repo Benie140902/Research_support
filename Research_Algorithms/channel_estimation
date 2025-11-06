@@ -1,0 +1,283 @@
+function [H,nVar,info] = ownChannelEstimate(varargin) 
+narginchk(2,9);
+    
+    % Get optional inputs, inputs whose position depends upon the syntax,
+    % or variables that depend upon optional inputs
+    % rxGrid: received grid
+    % refInd: reference signal indices
+    % refSym: reference signal symbols
+    % N: number of OFDM symbols
+    % P: number of transmit antenna ports
+    % ofdmInfo: OFDM dimensionality information
+    % estConfig: channel estimator configuration
+    [rxGrid,refInd,refSym,N,P,ofdmInfo,estConfig] = ...
+        getOptionalInputs(varargin{:});
+    
+    % Get channel estimate output dimensions, final channel estimate will
+    % be of size K-by-N-by-R-by-P
+    K = ofdmInfo.NSubcarriers;
+    R = size(rxGrid,3);
+    
+    % 'eK' is the number of extra subcarriers that will be added to the
+    % channel estimate grid (half at each side), to mitigate band edge
+    % effects when reconstructing the channel frequency response (CFR)
+    % from the denoised channel impulse response (CIR)
+    eRB = 4;
+    eK = eRB * 12;
+    
+    % Create the channel estimate grid, including 'eK' extra subcarriers
+    siz = [K+eK N R P];
+    H = complex(zeros(siz,'like',rxGrid));
+    
+    % Create matrices 'kmin' and 'kmax' which will be used to store the 
+    % minimum and maximum frequency subscripts, for each OFDM symbol and 
+    % transmit port
+    kmin = zeros([N P]);
+    kmax = zeros([N P]);
+    
+    % Create array 'refRBs' which will be used to identify the resource
+    % blocks which contain reference symbols, for each OFDM symbol and
+    % transmit port
+    NRB = K / 12;
+    refRBs = zeros([NRB+eRB N P]);
+    
+    % ---------------------------------------------------------------------
+    % LS estimation, CDM despreading
+    % ---------------------------------------------------------------------
+    
+    % Extract CDM despreading parameters
+    fdCDM = estConfig.CDMLengths(1);
+    tdCDM = estConfig.CDMLengths(2);
+    
+    % For each transmit port
+    for p = 1:P
+        
+        % Get frequency (subcarrier k) and time (OFDM symbol n) subscripts
+        % of reference signal for the current port. 'thisport' is a logical
+        % indexing vector for the current port, used to extract the
+        % corresponding reference symbols
+        coder.varsize('refInd',[Inf Inf],[1 1]);
+        [ksubs,nsubs,thisport] = getPortSubscripts(K,N,P,refInd,p);
+        refSymThisPort = refSym(thisport);
+        
+        % For each OFDM symbol
+        un = unique(nsubs).';
+        for uni = 1:numel(un)
+            
+            % Get frequency and OFDM symbol subscripts
+            n = un(uni);
+            k = ksubs(nsubs==n);
+            
+            % Initialize frequency subscripts 'ke' to be used for
+            % interpolation, taking extra subcarriers into account
+            ke = k + eK/2;
+            
+            % Calculate 'kmin' and 'kmax', the minimum and maximum
+            % frequency subscripts for this OFDM symbol and port
+            rbsubs = unique(floor((ke - 1) / 12));
+            kmin(n,p) = rbsubs(1)*12 - (eK/2) + 1;
+            kmax(n,p) = rbsubs(end)*12 + (eK/2) + 12;
+            
+            % Mark resource blocks (RBs) containing reference signals for 
+            % this OFDM symbol and port in 'refRBs'
+            refRBs(rbsubs + 1,n,p) = 1;
+            
+            % For each receive antenna
+            for r = 1:R
+                
+                % Perform least squares (LS) estimate of channel in the 
+                % locations of the reference symbols. 'H_LS' is a column
+                % vector containing the LS estimates for all subcarriers
+                % for the current port, OFDM symbol and receive antenna
+                sigma_h2=1;
+                beta=0.1 % autocorrelation facotr
+                noiseVar=0.01;
+                H_LS = rxGrid(k,n,r) ./ refSymThisPort(nsubs==n);
+                k_ref = double(k);                                 % Subcarrier indices with pilots
+                Rhy = sigma_h2 * exp(-beta * abs(ksubs(1:k-1).' - k_ref));
+                Rdd = sigma_h2 * exp(-beta * abs(k_ref.' - k_ref));
+
+                Ryy = Rdd + noiseVar * eye(length(k_ref));
+
+            % MMSE Estimate at target subcarriers
+            H_MMSE = Rhy * inv(Ryy) *H_LS;
+            
+
+ 
+                
+                % Perform FD-CDM despreading if required
+                if (fdCDM>1)
+                    % 'm' is zero if the LS estimates divide evenly into
+                    % FD-CDM groups, otherwise 'm' is the number of LS
+                    % estimates in the final partial group
+                    m = mod(numel(H_MMSE),fdCDM);
+                    for a = 0:double(m~=0)
+                        if (~a)
+                            % whole CDM lengths (may be empty)
+                            k_LS = 1:(numel(H_MMSE)-m);
+                            nkCDM = fdCDM;
+                        else
+                            % part CDM length (may be empty)
+                            k_LS = numel(H_MMSE) + (-m+1:0);
+                            nkCDM = m;
+                        end
+                        % Extract the LS estimates and reshape so that each
+                        % column contains an FD-CDM group
+                        x = reshape(H_MMSE(k_LS),nkCDM,[]);
+                        % Average across 1st dimension (i.e. across the
+                        % FD-CDM group) and repeat the averaged value
+                        x = repmat(mean(x,1),[nkCDM 1]);
+                        % Reshape back into a single column
+                        H_MMSE(k_LS) = reshape(x,[],1);
+                    end
+                end
+                
+                % Assign the estimates into the appropriate region of
+                % the overall channel estimate array
+                H(ke,n,r,p) = H_MMSE;
+                
+            end
+            
+                  
+        endfunction [H,nVar,info] = ownChannelEstimate(varargin) 
+narginchk(2,9);
+    
+    % Get optional inputs, inputs whose position depends upon the syntax,
+    % or variables that depend upon optional inputs
+    % rxGrid: received grid
+    % refInd: reference signal indices
+    % refSym: reference signal symbols
+    % N: number of OFDM symbols
+    % P: number of transmit antenna ports
+    % ofdmInfo: OFDM dimensionality information
+    % estConfig: channel estimator configuration
+    [rxGrid,refInd,refSym,N,P,ofdmInfo,estConfig] = ...
+        getOptionalInputs(varargin{:});
+    
+    % Get channel estimate output dimensions, final channel estimate will
+    % be of size K-by-N-by-R-by-P
+    K = ofdmInfo.NSubcarriers;
+    R = size(rxGrid,3);
+    
+    % 'eK' is the number of extra subcarriers that will be added to the
+    % channel estimate grid (half at each side), to mitigate band edge
+    % effects when reconstructing the channel frequency response (CFR)
+    % from the denoised channel impulse response (CIR)
+    eRB = 4;
+    eK = eRB * 12;
+    
+    % Create the channel estimate grid, including 'eK' extra subcarriers
+    siz = [K+eK N R P];
+    H = complex(zeros(siz,'like',rxGrid));
+    
+    % Create matrices 'kmin' and 'kmax' which will be used to store the 
+    % minimum and maximum frequency subscripts, for each OFDM symbol and 
+    % transmit port
+    kmin = zeros([N P]);
+    kmax = zeros([N P]);
+    
+    % Create array 'refRBs' which will be used to identify the resource
+    % blocks which contain reference symbols, for each OFDM symbol and
+    % transmit port
+    NRB = K / 12;
+    refRBs = zeros([NRB+eRB N P]);
+    
+    % ---------------------------------------------------------------------
+    % LS estimation, CDM despreading
+    % ---------------------------------------------------------------------
+    
+    % Extract CDM despreading parameters
+    fdCDM = estConfig.CDMLengths(1);
+    tdCDM = estConfig.CDMLengths(2);
+    
+    % For each transmit port
+    for p = 1:P
+        
+        % Get frequency (subcarrier k) and time (OFDM symbol n) subscripts
+        % of reference signal for the current port. 'thisport' is a logical
+        % indexing vector for the current port, used to extract the
+        % corresponding reference symbols
+        coder.varsize('refInd',[Inf Inf],[1 1]);
+        [ksubs,nsubs,thisport] = getPortSubscripts(K,N,P,refInd,p);
+        refSymThisPort = refSym(thisport);
+        
+        % For each OFDM symbol
+        un = unique(nsubs).';
+        for uni = 1:numel(un)
+            
+            % Get frequency and OFDM symbol subscripts
+            n = un(uni);
+            k = ksubs(nsubs==n);
+            
+            % Initialize frequency subscripts 'ke' to be used for
+            % interpolation, taking extra subcarriers into account
+            ke = k + eK/2;
+            
+            % Calculate 'kmin' and 'kmax', the minimum and maximum
+            % frequency subscripts for this OFDM symbol and port
+            rbsubs = unique(floor((ke - 1) / 12));
+            kmin(n,p) = rbsubs(1)*12 - (eK/2) + 1;
+            kmax(n,p) = rbsubs(end)*12 + (eK/2) + 12;
+            
+            % Mark resource blocks (RBs) containing reference signals for 
+            % this OFDM symbol and port in 'refRBs'
+            refRBs(rbsubs + 1,n,p) = 1;
+            
+            % For each receive antenna
+            for r = 1:R
+                
+                % Perform least squares (LS) estimate of channel in the 
+                % locations of the reference symbols. 'H_LS' is a column
+                % vector containing the LS estimates for all subcarriers
+                % for the current port, OFDM symbol and receive antenna
+                sigma_h2=1;
+                beta=0.1 % autocorrelation facotr
+                noiseVar=0.01;
+                H_LS = rxGrid(k,n,r) ./ refSymThisPort(nsubs==n);
+                k_ref = double(k);                                 % Subcarrier indices with pilots
+                Rhy = sigma_h2 * exp(-beta * abs(ksubs(1:k-1).' - k_ref));
+                Rdd = sigma_h2 * exp(-beta * abs(k_ref.' - k_ref));
+
+                Ryy = Rdd + noiseVar * eye(length(k_ref));
+
+            % MMSE Estimate at target subcarriers
+            H_MMSE = Rhy * inv(Ryy) *H_LS;
+            
+
+ 
+                
+                % Perform FD-CDM despreading if required
+                if (fdCDM>1)
+                    % 'm' is zero if the LS estimates divide evenly into
+                    % FD-CDM groups, otherwise 'm' is the number of LS
+                    % estimates in the final partial group
+                    m = mod(numel(H_MMSE),fdCDM);
+                    for a = 0:double(m~=0)
+                        if (~a)
+                            % whole CDM lengths (may be empty)
+                            k_LS = 1:(numel(H_MMSE)-m);
+                            nkCDM = fdCDM;
+                        else
+                            % part CDM length (may be empty)
+                            k_LS = numel(H_MMSE) + (-m+1:0);
+                            nkCDM = m;
+                        end
+                        % Extract the LS estimates and reshape so that each
+                        % column contains an FD-CDM group
+                        x = reshape(H_MMSE(k_LS),nkCDM,[]);
+                        % Average across 1st dimension (i.e. across the
+                        % FD-CDM group) and repeat the averaged value
+                        x = repmat(mean(x,1),[nkCDM 1]);
+                        % Reshape back into a single column
+                        H_MMSE(k_LS) = reshape(x,[],1);
+                    end
+                end
+                
+                % Assign the estimates into the appropriate region of
+                % the overall channel estimate array
+                H(ke,n,r,p) = H_MMSE;
+                
+            end
+            
+                  
+        end
