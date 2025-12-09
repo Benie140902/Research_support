@@ -26,7 +26,7 @@ Real_time_algo
 ├── port_channel_average_impl.cpp        # Modified srsRAN CE implementation with data extraction
 └── README.md                # Documentation (this file)
 
-1. ce_research.py (Python Implementation)
+1. channel_estimation_algo.py (Python Implementation)
 
 This file contains:
 
@@ -46,7 +46,7 @@ Metrics such as MSE, NMSE, EVM, correlation, etc.
 
 This file allows researchers to prototype and evaluate algorithms much faster than modifying C++ and rebuilding srsRAN repeatedly.
 
-2. ce_srsran_mod.cpp (C++ Implementation in srsRAN)
+2. port_channel_average_impl.cpp (C++ Implementation in srsRAN)
 
 This is a modified version of the channel estimation code in srsRAN.
 
