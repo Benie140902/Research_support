@@ -17,8 +17,7 @@
  * A copy of the GNU Affero General Public License can be found in
  * the LICENSE file in the top-level directory of this distribution
  * and at http://www.gnu.org/licenses/.
- *
- * These codes are part of srsRAN project version 24_10 and I have developed interface to changes their alogrithm in channel estimation process and compare with 5G standard algorithm support /
+ */
 #include <fstream>
 #include <sys/socket.h>
 #include <netinet/in.h>
